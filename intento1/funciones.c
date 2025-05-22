@@ -1,6 +1,7 @@
+#include <time.h>
 #include "funciones.h"
 
-void iniciar_juego(int num_procesos, const int token_inicial) {
+void iniciar_juego(int num_procesos, const int token_inicial,int valor_aletorio) {
     pid_t pid;
     int i;
     int token = -1; // Token que usan los hijos para jugar
@@ -67,7 +68,8 @@ void iniciar_juego(int num_procesos, const int token_inicial) {
             // close(pipes_hermanos[(i + num_procesos - 1) % num_procesos][1]); // Cerrar escritura del pipe hacia el anterior
 
             // Aquí el hijo usa anterior y siguiente para comunicarse
-            jugar(num_procesos, i, token_inicial, anterior, siguiente);
+            jugar(num_procesos, i, token_inicial,valor_aletorio, anterior, siguiente);
+            wait(NULL); // Esperar a que el hijo termine
             exit(0);
         } 
 
@@ -137,6 +139,11 @@ void enviar_pids_hijos(int num_procesos, int pids[], int pipes[][2][2]) {
         }
     }
     printf("[%d] Padre: envie todos los PIDs de los hijos\n", getpid());
+    for (int i = 0; i < num_procesos; i++)
+    {
+        printf("%d ", pids[i]);
+    }
+    
 }
 
 
@@ -164,7 +171,7 @@ void enviar_token_inicial(int num_procesos, int pipes[][2][2], int token) {
     write(pipes[0][0][1], &token, sizeof(token));
 }
 
-void jugar(int num_procesos, int id, int token_inicial, int anterior, int siguiente) {
+void jugar(int num_procesos, int id, int token_inicial,int M, int anterior, int siguiente) {
     int token = -1;
 
     if (id == 0) {
@@ -174,6 +181,7 @@ void jugar(int num_procesos, int id, int token_inicial, int anterior, int siguie
     }
 
     while (1) {
+        srand(time(NULL) + getpid()); // Semilla para la función rand()
         // Leer el token del proceso anterior
         if (read(anterior, &token, sizeof(token)) <= 0) {
             perror("Error al leer el token");
@@ -182,7 +190,7 @@ void jugar(int num_procesos, int id, int token_inicial, int anterior, int siguie
         printf("[%d] Recibí el token %d\n", getpid(), token);
 
         // Modificar el token
-        token++;
+        token -= rand() % (M-1);
 
         // Enviar el token al siguiente proceso
         if (write(siguiente, &token, sizeof(token)) <= 0) {
@@ -190,9 +198,9 @@ void jugar(int num_procesos, int id, int token_inicial, int anterior, int siguie
             break;
         }
         printf("[%d] Envié el token %d\n", getpid(), token);
-
+        sleep(1); // Esperar un segundo antes de continuar
         // Condición para terminar el juego
-        if (token >= token_inicial + 10) {
+        if (token <0) {
             printf("[%d] Fin del juego.\n", getpid());
             break;
         }
