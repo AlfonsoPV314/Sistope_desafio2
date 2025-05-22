@@ -1,22 +1,17 @@
 #include "funciones.h"
 
-void iniciar_juego(int num_procesos) {
+void iniciar_juego(int num_procesos, const int token_inicial) {
     pid_t pid;
     int i;
-    int token = 123; // Token que se envía a los hijos
+    int token = -1; // Token que usan los hijos para jugar
     int response;   // Respuesta que se recibe de los hijos
     int pids[num_procesos]; // Array para almacenar los PIDs de los hijos
-
-    // Crear pipes para cada proceso hijo
     int pipes[num_procesos][2][2]; // [cantidad num_procesos de pipes][0 para pipe padre->hijo, 1 para pipe hijo->padre][0 para lectura, 1 para escritura]
-    for (i = 0; i < num_procesos; i++) {
-        if (pipe(pipes[i][0]) == -1 || pipe(pipes[i][1]) == -1) {
-            perror("Error al crear los pipes");
-            exit(EXIT_FAILURE);
-        }
-    }
+    int pipes_hermanos[num_procesos][2]; // Pipes para comunicación entre hijos
 
-    printf("[%d] Soy el proceso padre y estoy creando %d procesos hijos\n", getpid(), num_procesos);
+    crear_pipes(num_procesos, pipes, pipes_hermanos);
+
+    printf("[%d] Padre: estoy creando %d procesos hijos\n", getpid(), num_procesos);
 
     for (i = 0; i < num_procesos; i++) {
         pid = fork();
@@ -30,19 +25,22 @@ void iniciar_juego(int num_procesos) {
 
         // Proceso hijo
         else if (pid == 0) {
-            printf("[%d] Soy el proceso hijo de indice %d y mi padre es %d\n", getpid(), i, getppid());
+            printf("[%d] Hola mundo! Soy el proceso hijo de indice %d y mi padre es %d\n", getpid(), i, getppid());
 
             pid_t pid_siguiente, pid_anterior;
 
             // Cerrar extremos innecesarios
-            close(pipes[i][0][1]); // Cerrar escritura del padre->hijo
-            close(pipes[i][1][0]); // Cerrar lectura del hijo->padre
+            for (int j = 0; j < num_procesos; j++) {
+                if (j != i) {
+                    // Cerrar extremos que no pertenecen al hijo actual
+                    close(pipes[j][0][1]); // Cerrar escritura del padre->hijo para otros hijos
+                    close(pipes[j][1][0]); // Cerrar lectura del hijo->padre para otros hijos
+                }
+            }
+            close(pipes[i][0][1]); // Cerrar lectura del padre->hijo
+            close(pipes[i][1][0]); // Cerrar escritura del hijo->padre
 
-            read(pipes[i][0][0], &pid_siguiente, sizeof(token));    // Leer el PID del siguiente hermano
-            printf("[%d] Como proceso de indice %d, recibi el PID del hermano siguiente: %d\n", getpid(), i, pid_siguiente);
-
-            read(pipes[i][0][0], &pid_anterior, sizeof(token));   // Leer el PID del hermano anterior
-            printf("[%d] Como proceso de indice %d, recibi el PID del herm¿ano anterior: %d\n", getpid(), i, pid_anterior);
+            recibir_pids_hijos(num_procesos, pids, pipes, i);
 
             // // Modificar el token y enviarlo de vuelta al padre
             // response = getpid();
@@ -51,13 +49,31 @@ void iniciar_juego(int num_procesos) {
             // // Cerrar extremos restantes
             // close(pipes[i][0][0]);
             // close(pipes[i][1][1]);
-            jugar(num_procesos, i);
+
+            int anterior = pipes_hermanos[(i + num_procesos - 1) % num_procesos][0];    // Pipe para comunicación con el hermano anterior
+            int siguiente = pipes_hermanos[(i + 1) % num_procesos][1];  // Pipe para comunicación con el hermano siguiente
+
+            // Cerrar extremos innecesarios
+            // Cerrar extremos innecesarios
+            for (int j = 0; j < num_procesos; j++) {
+                if (j != i && j != (i + 1) % num_procesos && j != (i + num_procesos - 1) % num_procesos) {
+                    close(pipes_hermanos[j][0]); // Cerrar lectura de pipes que no usa
+                    close(pipes_hermanos[j][1]); // Cerrar escritura de pipes que no usa
+                }
+            }
+            close(pipes_hermanos[i][1]); // Cerrar escritura del propio pipe de entrada
+
+            // close(pipes_hermanos[(i + 1) % num_procesos][0]); // Cerrar lectura del pipe hacia el siguiente 
+            // close(pipes_hermanos[(i + num_procesos - 1) % num_procesos][1]); // Cerrar escritura del pipe hacia el anterior
+
+            // Aquí el hijo usa anterior y siguiente para comunicarse
+            jugar(num_procesos, i, token_inicial, anterior, siguiente);
             exit(0);
         } 
 
         // Proceso padre
         else {
-            printf("[%d] Soy el proceso padre y he creado un hijo con PID %d\n", getpid(), pid);
+            printf("[%d] Padre: he creado un hijo con PID %d\n", getpid(), pid);
             // Cerrar extremos innecesarios
             close(pipes[i][0][0]); // Cerrar lectura del padre->hijo
             close(pipes[i][1][1]); // Cerrar escritura del hijo->padre
@@ -65,10 +81,10 @@ void iniciar_juego(int num_procesos) {
     }
 
     // Comunicación con cada hijo
-    for (i = 0; i < num_procesos; i++) {
+    // for (i = 0; i < num_procesos; i++) {
 
         // Enviar el PID de los hermanos con los que se va a comunicar al hijo
-        enviar_pids_hijos(num_procesos, pids, pipes);
+        // enviar_pids_hijos(num_procesos, pids, pipes);
 
         // Cerrar extremos utilizados
         // close(pipes[i][0][1]);  // Cerrar escritura del padre->hijo
@@ -77,55 +93,144 @@ void iniciar_juego(int num_procesos) {
         // // Leer respuesta del hijo
         // read(pipes[i][1][0], &response, sizeof(response));
         // printf("[%d] Recibi esta respuesta del hijo de indice %d: %d\n", getpid(), i, response);
-    }
+    // }
 
-    enviar_token_inicial(num_procesos, pipes, token);
+    enviar_pids_hijos(num_procesos, pids, pipes);
+
+    enviar_token_inicial(num_procesos, pipes, token_inicial);
 
     // Esperar a todos los hijos
     for (i = 0; i < num_procesos; i++) {
         wait(NULL);
     }
 
-    printf("[%d] Todos los procesos hijos han terminado\n", getpid());
+    printf("[%d] Padre: Todos los procesos hijos han terminado\n", getpid());
+}
+
+void crear_pipes(int num_procesos, int pipes[][2][2], int pipes_hermanos[][2]) {
+
+    // Crear pipes para cada hijo
+    for (int i = 0; i < num_procesos; i++) {
+        if (pipe(pipes[i][0]) == -1 || pipe(pipes[i][1]) == -1) {
+            perror("Error al crear pipes");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Crear pipes para comunicación entre hijos
+    for (int i = 0; i < num_procesos; i++) {
+        if (pipe(pipes_hermanos[i]) == -1) {
+            perror("Error al crear pipes entre hijos");
+            exit(EXIT_FAILURE);
+        }
+    }
 }
 
 void enviar_pids_hijos(int num_procesos, int pids[], int pipes[][2][2]) {
-
-    //printf("[%d] Soy el proceso padre y estoy enviando los PIDs de los hijos\n", getpid());
-
-    // Enviar el PID de hermanos con los que se comunica al primer hijo (un poco hardcodeado pero funciona)
-    printf("[%d] Soy el proceso padre y estoy comunicando con el hijo %d de indice %d\n", getpid(), pids[0], 0);
-    write(pipes[0][0][1], &pids[1], sizeof(int)); // Enviar el PID del hijo siguiente
-    write(pipes[0][0][1], &pids[num_procesos - 1], sizeof(int)); // Enviar el PID del hijo anterior
-
-    // Enviar el PID de hermanos con los que se comunica a demás hijos
-    for (int i = 1; i < num_procesos; i++) {
-        printf("[%d] Soy el proceso padre y estoy comunicando con el hijo %d de indice %d\n", getpid(), pids[i], i);
-
-        // si el hijo no es el último
-        if (i + 1 < num_procesos) {
-            write(pipes[i][0][1], &pids[i + 1], sizeof(int));   // Enviar el PID del hijo siguiente
-            write(pipes[i][0][1], &pids[i - 1], sizeof(int));   // Enviar el PID del hijo anterior
-        }
-        
-        // si el hijo es el ultimo
-        else {
-            write(pipes[i][0][1], &pids[0], sizeof(int));   // Enviar el PID del primer hijo
-            write(pipes[i][0][1], &pids[i - 1], sizeof(int));   // Enviar el PID del hijo anterior
+    for (int i = 0; i < num_procesos; i++) {
+        for (int j = 0; j < num_procesos; j++) {
+            if (write(pipes[i][0][1], &pids[j], sizeof(pids[j])) == -1) {
+                perror("Error al enviar el PID al hijo");
+                exit(EXIT_FAILURE);
+            }
+            printf("[%d] Enviando el PID %d al hijo %d de indice %d\n", getpid(), pids[j], pids[i], i);
         }
     }
+    printf("[%d] Padre: envie todos los PIDs de los hijos\n", getpid());
+}
+
+
+void recibir_pids_hijos(int num_procesos, int pids[], int pipes[][2][2], int id) {
+    //printf("[%d] Soy el proceso hijo y estoy recibiendo los PIDs de los hijos\n", getpid());
+
+    // Recibir el PID de hermanos con los que se comunica a demás hijos
+    for (int i = 0; i < num_procesos; i++) {
+        if(read(pipes[id][0][0], &pids[i], sizeof(pids[i])) <= 0){
+            perror("Error al leer el PID del padre");
+            exit(EXIT_FAILURE);
+        } 
+        else {
+            printf("[%d] Recibi el PID %d del padre\n", getpid(), pids[i]);
+        }
+    }
+    printf("[%d] Recibi todos los PIDs de los hijos\n", getpid());
 }
 
 void enviar_token_inicial(int num_procesos, int pipes[][2][2], int token) {
-    for (int i = 0; i < num_procesos; i++) {
-        write(pipes[i][0][1], &token, sizeof(token));
+    
+    printf("[%d] Padre: estoy enviando el token inicial %d al hijo inicial\n", getpid(), token);
+
+    // Enviar el token inicial al primer hijo
+    write(pipes[0][0][1], &token, sizeof(token));
+}
+
+void jugar(int num_procesos, int id, int token_inicial, int anterior, int siguiente) {
+    int token = -1;
+
+    if (id == 0) {
+        token = token_inicial;
+        printf("[%d] Soy el hijo inicial y estoy enviando el token %d\n", getpid(), token);
+        write(siguiente, &token, sizeof(token));
+    }
+
+    while (1) {
+        // Leer el token del proceso anterior
+        if (read(anterior, &token, sizeof(token)) <= 0) {
+            perror("Error al leer el token");
+            break;
+        }
+        printf("[%d] Recibí el token %d\n", getpid(), token);
+
+        // Modificar el token
+        token++;
+
+        // Enviar el token al siguiente proceso
+        if (write(siguiente, &token, sizeof(token)) <= 0) {
+            perror("Error al enviar el token");
+            break;
+        }
+        printf("[%d] Envié el token %d\n", getpid(), token);
+
+        // Condición para terminar el juego
+        if (token >= token_inicial + 10) {
+            printf("[%d] Fin del juego.\n", getpid());
+            break;
+        }
     }
 }
 
-void jugar(int num_procesos, int id) {
-    printf("[%d] Estoy jugando...\n", getpid());
-    return;
-    // while(1){
 
-    // }
-}
+
+// int** crear_pipes_hijo_hijo() {
+//     // Crear dos pipes para comunicación entre hijos
+//     int** pipes = malloc(2 * sizeof(int*));
+//     pipes[0] = malloc(2 * sizeof(int));
+//     pipes[1] = malloc(2 * sizeof(int));
+
+//     // Pipe para comunicación con el hijo anterior
+//     if (pipe(pipes[0]) == -1) {
+//         perror("Error al crear el pipe hijo->hijo anterior");
+//         exit(EXIT_FAILURE);
+//     }
+
+//     // Pipe para comunicación con el hijo siguiente
+//     if (pipe(pipes[1]) == -1) {
+//         perror("Error al crear el pipe hijo->hijo siguiente");
+//         exit(EXIT_FAILURE);
+//     }
+
+//     return pipes;
+// }
+
+// void liberar_pipes_hijo_hijo(int** pipes) {
+//     // Cerrar los pipes
+//     close(pipes[0][0]); // Cerrar lectura del pipe hijo->hijo anterior
+//     close(pipes[0][1]); // Cerrar escritura del pipe hijo->hijo anterior
+//     close(pipes[1][0]); // Cerrar lectura del pipe hijo->hijo siguiente
+//     close(pipes[1][1]); // Cerrar escritura del pipe hijo->hijo siguiente
+
+//     // Liberar memoria
+//     free(pipes[0]);
+//     free(pipes[1]);
+//     free(pipes);
+// }
