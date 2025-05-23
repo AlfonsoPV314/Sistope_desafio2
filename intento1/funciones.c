@@ -52,17 +52,18 @@ void iniciar_juego(int num_procesos, const int token_inicial,int valor_aletorio)
             // close(pipes[i][1][1]);
 
             int anterior = pipes_hermanos[(i + num_procesos - 1) % num_procesos][0];    // Pipe para comunicación con el hermano anterior
-            int siguiente = pipes_hermanos[(i + 1) % num_procesos][1];  // Pipe para comunicación con el hermano siguiente
+            int siguiente = pipes_hermanos[i % num_procesos][1];  // Pipe para comunicación con el hermano siguiente
+            printf("[%d] Soy el hijo %d y me comunico mediante el pipe anterior %d y el siguiente %d\n", getpid(), i, anterior, siguiente);
 
             // Cerrar extremos innecesarios
-            // Cerrar extremos innecesarios
             for (int j = 0; j < num_procesos; j++) {
-                if (j != i && j != (i + 1) % num_procesos && j != (i + num_procesos - 1) % num_procesos) {
+                if (j != i && j != i % num_procesos && j != (i + num_procesos - 1) % num_procesos) {
                     close(pipes_hermanos[j][0]); // Cerrar lectura de pipes que no usa
                     close(pipes_hermanos[j][1]); // Cerrar escritura de pipes que no usa
                 }
             }
-            close(pipes_hermanos[i][1]); // Cerrar escritura del propio pipe de entrada
+            close(pipes_hermanos[(i + num_procesos - 1) % num_procesos][1]); // Cerrar escritura del propio pipe de entrada
+            close(pipes_hermanos[i % num_procesos][0]); // Cerrar lectura del pipe propio
 
             // close(pipes_hermanos[(i + 1) % num_procesos][0]); // Cerrar lectura del pipe hacia el siguiente 
             // close(pipes_hermanos[(i + num_procesos - 1) % num_procesos][1]); // Cerrar escritura del pipe hacia el anterior
@@ -139,10 +140,10 @@ void enviar_pids_hijos(int num_procesos, int pids[], int pipes[][2][2]) {
         }
     }
     printf("[%d] Padre: envie todos los PIDs de los hijos\n", getpid());
-    for (int i = 0; i < num_procesos; i++)
-    {
-        printf("%d ", pids[i]);
-    }
+    // for (int i = 0; i < num_procesos; i++)
+    // {
+    //     printf("%d ", pids[i]);
+    // }
     
 }
 
@@ -187,23 +188,46 @@ void jugar(int num_procesos, int id, int token_inicial,int M, int anterior, int 
             perror("Error al leer el token");
             break;
         }
-        printf("[%d] Recibí el token %d\n", getpid(), token);
+        printf("[%d] Recibí el token %d desde el pipe %d\n", getpid(), token, anterior);
 
         // Modificar el token
-        token -= rand() % (M-1);
+        token -= rand() % M;    // Resta un valor aleatorio entre 0 y M
+        printf("[%d] Modifiqué el token a %d\n", getpid(), token);
 
         // Enviar el token al siguiente proceso
         if (write(siguiente, &token, sizeof(token)) <= 0) {
             perror("Error al enviar el token");
             break;
         }
-        printf("[%d] Envié el token %d\n", getpid(), token);
+        //printf("[%d] Envié el token %d hacia el pipe %d. Espera un minuto... el token es negativo? hmmm vamos a verificar\n", getpid(), token, siguiente);
         sleep(1); // Esperar un segundo antes de continuar
         // Condición para terminar el juego
-        if (token <0) {
+        if (token < 0) {
             printf("[%d] Fin del juego.\n", getpid());
             break;
         }
+        // eliminacion(num_procesos, id, anterior, siguiente, token);
+    }
+}
+
+// La idea es que cuando el token sea negativo, el hijo se elimine a sí mismo y envíe su indice negativo al hermano para que pueda saber que el proceso de ese índice murió y que lo propague a los demás hermanos para que todos lo sepan. Los procesos de indices adyacentes al eliminado deben editar sus pipes de anterior y siguiente (de alguna forma tienen que saber a cual cambiarlos después lol). Luego, pueden activar el mecanismo de elección de líder, en el cual si el id del proceso es el menor, resetea el token y continúa el juego. Los que no son el menor, se quedan esperando a que el líder les envíe el token nuevamente (la funcion elegir_lider no debe hacer nada en ese caso, deben seguir jugando normal).
+void eliminacion(int num_procesos, int id, int anterior, int siguiente, int token) {
+    if(token < 0){
+        //printf("[%d] Soy el proceso hijo y estoy eliminando el proceso %d\n", getpid(), pids[id]);
+        // Cerrar los pipes
+        close(anterior); // Cerrar escritura del pipe hijo->padre
+
+        id *= -1;
+
+        if(write(siguiente, &id, sizeof(token)) == -1) {
+            perror("Error al enviar el token al padre");
+            exit(EXIT_FAILURE);
+        }
+
+        close(siguiente); // Cerrar lectura del pipe padre->hijo
+
+        // Terminar el proceso hijo
+        exit(0);
     }
 }
 
