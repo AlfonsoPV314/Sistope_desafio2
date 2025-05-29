@@ -8,11 +8,8 @@ void iniciar_juego(int num_procesos, const int token_inicial,int valor_aletorio)
     int response;   // Respuesta que se recibe de los hijos
     int pids[num_procesos]; // Array para almacenar los PIDs de los hijos
     int pipes[num_procesos][2][2]; // [cantidad num_procesos de pipes][0 para pipe padre->hijo, 1 para pipe hijo->padre][0 para lectura, 1 para escritura]
-    int** pipes_hermanos = malloc(num_procesos * sizeof(int*));
-    for (int i = 0; i < num_procesos; i++) {
-        pipes_hermanos[i] = malloc(2 * sizeof(int));
-        //pipe(pipes_hermanos[i]);
-    }
+    int pipes_hermanos[num_procesos][2]; // Pipes para comunicación entre hijos
+
     crear_pipes(num_procesos, pipes, pipes_hermanos);
 
     printf("[%d] Padre: estoy creando %d procesos hijos\n", getpid(), num_procesos);
@@ -73,7 +70,7 @@ void iniciar_juego(int num_procesos, const int token_inicial,int valor_aletorio)
 
             // Aquí el hijo usa anterior y siguiente para comunicarse
             jugar(num_procesos, i, token_inicial,valor_aletorio, anterior, siguiente, pipes_hermanos, pids);
-            
+            wait(NULL); // Esperar a que el hijo termine
             exit(0);
         } 
 
@@ -113,7 +110,7 @@ void iniciar_juego(int num_procesos, const int token_inicial,int valor_aletorio)
     printf("[%d] Padre: Todos los procesos hijos han terminado\n", getpid());
 }
 
-void crear_pipes(int num_procesos, int pipes[][2][2], int **pipes_hermanos) {
+void crear_pipes(int num_procesos, int pipes[][2][2], int pipes_hermanos[][2]) {
 
     // Crear pipes para cada hijo
     for (int i = 0; i < num_procesos; i++) {
@@ -175,11 +172,11 @@ void enviar_token_inicial(int num_procesos, int pipes[][2][2], int token) {
     write(pipes[0][0][1], &token, sizeof(token));
 }
 
-void jugar(int num_procesos, int id, int token_inicial, int M, int anterior, int siguiente, int** pipes_hermanos, int* pids) {
+void jugar(int num_procesos, int id, int token_inicial,int M, int anterior, int siguiente, int pipes_hermanos[][2], int* pids) {
     int token = -1;
-    int token_anterior = -1;
-    int lider = 0;
-    if (id == lider) {
+    int id_pipes = id;
+
+    if (id == 0) {
         token = token_inicial;
         printf("[%d] Soy el hijo inicial y estoy enviando el token %d\n", getpid(), token);
         write(siguiente, &token, sizeof(token));
@@ -194,141 +191,98 @@ void jugar(int num_procesos, int id, int token_inicial, int M, int anterior, int
             exit(EXIT_FAILURE);
         }
         printf("[%d] Recibí el token %d desde el pipe %d\n", getpid(), token, anterior);
-        
-        int modifique_token = 1;
 
-        // si el token llegó negativo, significa que el proceso con id -token fue eliminado
-        if(token < 0){
-            // si es la 2da vez consecutiva que me llega el mismo token negativo
-            if(token_anterior == token) {
-                // si soy el lider, sé que todos los procesos hermanos ya se actualizaron, y por ende puedo reiniciar el token y continuar el juego
-                if(id == lider){
-                    printf("[%d] Soy el lider y el token no ha cambiado, reiniciando el juego...\n", getpid());
-                    token = token_inicial; // Reiniciar el token
-                }
-                // si NO soy el lider, no hago nada y espero a que el líder reinicie el token
-                else{
-                    printf("[%d] No soy el lider y el token no ha cambiado, pasando token sin cambios...\n", getpid());
-                }
-            }
-            else{
-                // procesar la eliminacion
-                procesar_eliminacion_hermano(token, &id, &anterior, &siguiente, pipes_hermanos, &num_procesos, pids, &lider);
-                
-            }
-            modifique_token = 0;   // no modifiqué el token
+        // Verificar si el token es negativo
+        if(verificar_eliminacion_hermano(token, id, &id_pipes, anterior, siguiente, pipes_hermanos, num_procesos, pids)){
+            token = token_inicial; // Reiniciar el token si se eliminó un hermano
         }
-        else {
-              // Modificar el token
-            token -= rand() % M;    // Resta un valor aleatorio entre 0 y M
-            printf("[%d] Modifiqué el token a %d\n", getpid(), token);
-            modifique_token = 1;
-        }
-            
+
+        // Modificar el token
+        token -= rand() % M;    // Resta un valor aleatorio entre 0 y M
+        printf("[%d] Modifiqué el token a %d\n", getpid(), token);
 
         // Enviar el token al siguiente proceso
         if (write(siguiente, &token, sizeof(token)) <= 0) {
-            printf("[%d] Error al enviar el token",getpid());
+            perror("Error al enviar el token");
             exit(EXIT_FAILURE);
         }
-
-        printf("[%d] Envié el token %d hacia el pipe %d.\n", getpid(), token, siguiente);
+        // printf("[%d] Envié el token %d hacia el pipe %d. Espera un minuto... el token es negativo? hmmm vamos a verificar\n", getpid(), token, siguiente);
         sleep(1); // Esperar un segundo antes de continuar
+        
+        eliminar(num_procesos, id, anterior, siguiente, token);
 
-        if(modifique_token == 1 && token < 0){  // si token < 0 y modifiqué el token, perd ==> si es 1 significa que el token entró negativo, si es 0, el token lo hice negativo dentro de este proceso
-            eliminar(num_procesos, id, anterior, siguiente, token);
-        }
-        token_anterior = token; // Guardar el token anterior para verificar si se eliminó un hermano
     }
 }
 
-void procesar_eliminacion_hermano(int token, int* id, int* anterior, int* siguiente, int** pipes_hermanos, int* num_procesos, int* pids, int* lider) {
-    int id_proc_elim = -token;
-    printf("[%d] El token es negativo. Procediendo a cambiar pipes %d\n", getpid(), *id);
-    pids[id_proc_elim] = -1; // Marcar el proceso como eliminado
-    cambiar_pipes(anterior, siguiente, id, id_proc_elim, pipes_hermanos, num_procesos, pids);
-    verificacion_lider(id_proc_elim, lider, pids);
-} 
+bool verificar_eliminacion_hermano(int token, int id, int* id_pipes, int anterior, int siguiente, int pipes_hermanos[][2], int num_procesos, int* pids) {
+    if (token < 0) {
+        // Marcar el proceso como eliminado solo si no lo estaba
+        if (pids[-token] != -1) {
+            pids[-token] = -1;
 
-
-void verificacion_lider(int id_proc_elim, int *lider, int* pids) {    
-    int i = 0;
-    // si el proceso eliminado fue el lider
-    if(id_proc_elim == *lider){
-        int stop = 0;
-        // buscar el nuevo proceso de menor id
-        while(stop == 0){
-            if(pids[i] != -1){
-                *lider = i; // el nuevo lider es el proceso con menor id
-                stop = 1;
+            // Actualizar pipes si corresponde
+            if(-token + 1 == id){
+                cambiar_pipes(1, &anterior, &siguiente, id_pipes, token, pipes_hermanos, num_procesos, pids);
             }
-            i++;
+            else if(-token - 1 == id){
+                cambiar_pipes(0, &anterior, &siguiente, id_pipes, token, pipes_hermanos, num_procesos, pids);
+            }
+
+            return true;
         }
     }
-}   
-
-// La logica de esta cosa esta un poco rara, pero la idea es cuando le llega un token negativo a un hijo, marca como -1 el proceso que se elimino, y luego verifica si el id del proceso eliminado es el siguiente o el anterior. Si es el siguiente, entonces cambia el pipe de siguiente por el siguiente del siguiente, y si es el anterior, entonces cambia el pipe de anterior por el anterior del anterior. Pero lo de id no se si es necesario, ya que cuando se elimine un proceso va a quedar un hueco en los ids. Idk, a lo mejor funciona, tengo sueño y no quiero pensar mucho en esto xd.
-void cambiar_pipes(int* anterior, int* siguiente, int* id, int id_proc_elim, int** pipes_hermanos, int* num_procesos, int* pids) {
-    printf("[%d] HOLAAAA CAMBIANDO PIPES\n", getpid());
-    int old_id = *id;
-    int old_num_p = *num_procesos;
-    *num_procesos--;
-    if(*id > id_proc_elim){
-        *id--;
+    else {
+        // Si el token es positivo, no se hace nada
+        return false;
     }
-    if(((old_id + old_num_p - 1) % old_num_p) == (id_proc_elim % old_num_p)){
-        *anterior = pipes_hermanos[(*id + *num_procesos - 1) % *num_procesos][0];
-        printf("[%d] Cambiando pipe anterior %d por %d\n", getpid(), pipes_hermanos[(old_id + old_num_p - 1) % old_num_p][0], *anterior);
-    }
-    pipes_hermanos = actualizar_pipes_hermanos(id_proc_elim, pipes_hermanos, *num_procesos);
 }
 
-int** actualizar_pipes_hermanos(int id_eliminado, int** old_pipes_hermanos, int num_procesos) {
-    
-    int** new_pipes_hermanos = malloc(num_procesos * sizeof(int*));
-    int pipe_eliminada = id_eliminado % num_procesos;
-    
-    for (int i = 0, j = 0; i < num_procesos + 1; i++) {
-        if (i != pipe_eliminada) {
-            new_pipes_hermanos[j][0] = old_pipes_hermanos[i][0];
-            new_pipes_hermanos[j][1] = old_pipes_hermanos[i][1];
-            j++;
-        }
+// La logica de esta cosa esta un poco rara, pero la idea es cuando le llega un token negativo a un hijo, marca como -1 el proceso que se elimino, y luego verifica si el id del proceso eliminado es el siguiente o el anterior. Si es el siguiente, entonces cambia el pipe de siguiente por el siguiente del siguiente, y si es el anterior, entonces cambia el pipe de anterior por el anterior del anterior. Pero lo de id_pipes no se si es necesario, ya que cuando se elimine un proceso va a quedar un hueco en los ids. Idk, a lo mejor funciona, tengo sueño y no quiero pensar mucho en esto xd.
+void cambiar_pipes(int flag, int* anterior, int* siguiente, int* id_pipes, int token, int pipes_hermanos[][2], int num_procesos, int* pids) {
+    int idx = *id_pipes;
+    if(flag == 1){ // Cambiar siguiente
+        do {
+            idx = (idx + 1) % num_procesos;
+        } while (pids[idx] == -1);
+        *siguiente = pipes_hermanos[idx][1];
+        *id_pipes = idx;
     }
-    
-    for (int i = 0; i < num_procesos + 1; i++) {
-        free(old_pipes_hermanos[i]);
+    else if(flag == 0){ // Cambiar anterior
+        do {
+            idx = (idx - 1 + num_procesos) % num_procesos;
+        } while (pids[idx] == -1);
+        *anterior = pipes_hermanos[idx][0];
+        *id_pipes = idx;
     }
-    free(old_pipes_hermanos);
-    return new_pipes_hermanos;
 }
-
 
 // La idea es que cuando el token sea negativo, el hijo se elimine a sí mismo y envíe su indice negativo al hermano para que pueda saber que el proceso de ese índice murió y que lo propague a los demás hermanos para que todos lo sepan. Los procesos de indices adyacentes al eliminado deben editar sus pipes de anterior y siguiente (de alguna forma tienen que saber a cual cambiarlos después lol). Luego, pueden activar el mecanismo de elección de líder, en el cual si el id del proceso es el menor, resetea el token y continúa el juego. Los que no son el menor, se quedan esperando a que el líder les envíe el token nuevamente (la funcion elegir_lider no debe hacer nada en ese caso, deben seguir jugando normal).
 void eliminar(int num_procesos, int id, int anterior, int siguiente, int token) {
-    printf("[%d] Perdi! Eliminandome...\n", getpid());
-    // Cerrar los pipes
-    close(anterior); // Cerrar escritura del pipe hijo->padre
+    if(token < 0){
+        //printf("[%d] Soy el proceso hijo y estoy eliminando el proceso %d\n", getpid(), pids[id]);
+        // Cerrar los pipes
+        close(anterior); // Cerrar escritura del pipe hijo->padre
 
-    id *= -1;
+        id *= -1;
 
-    if(write(siguiente, &id, sizeof(id)) == -1) {
-        perror("Error al enviar el token al padre");
-        exit(EXIT_FAILURE);
+        if(write(siguiente, &id, sizeof(id)) == -1) {
+            perror("Error al enviar el token al padre");
+            exit(EXIT_FAILURE);
+        }
+
+        close(siguiente); // Cerrar lectura del pipe padre->hijo
+
+        // Terminar el proceso hijo
+        exit(0);
     }
-
-    close(siguiente); // Cerrar lectura del pipe padre->hijo
-
-    // Terminar el proceso hijo
-    exit(0);
 }
 
-int elegir_lider(int num_procesos, int id, int token, int anterior, int siguiente, int nuevo_lider,int token_inicial) {
+void elegir_lider(int num_procesos, int id, int token, int anterior, int siguiente) {
     // Aquí se implementa la lógica para elegir al líder
-    // Si el id del proceso es el menor de los vivos, se convierte en líder
-    if (id == nuevo_lider) {
+    // Si el id del proceso es el menor, se convierte en líder
+    if (id == 0) {
         printf("[%d] Soy el líder y estoy reiniciando el juego\n", getpid());
-        token = token_inicial; // Reiniciar el token
+        token = 10; // Reiniciar el token
         write(siguiente, &token, sizeof(token));
     }
 }
@@ -358,7 +312,11 @@ int elegir_lider(int num_procesos, int id, int token, int anterior, int siguient
 //     // Cerrar los pipes
 //     close(pipes[0][0]); // Cerrar lectura del pipe hijo->hijo anterior
 //     close(pipes[0][1]); // Cerrar escritura del pipe hijo->hijo anterior
-//     close(pipes[1][0]); // Cerrar lectura del pipe hijo->hijo siguiente                                                                  
+//     close(pipes[1][0]); // Cerrar lectura del pipe hijo->hijo siguiente
+//     close(pipes[1][1]); // Cerrar escritura del pipe hijo->hijo siguiente
+
+//     // Liberar memoria
+//     free(pipes[0]);
 //     free(pipes[1]);
 //     free(pipes);
 // }
