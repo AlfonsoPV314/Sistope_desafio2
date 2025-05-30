@@ -177,6 +177,7 @@ void jugar(int num_procesos, int id, const int token_inicial, int M, int anterio
             
             // si es la 2da vez consecutiva que me llega el mismo token negativo
             if(token_anterior == token) {
+
                 // si soy el lider, sé que todos los procesos hermanos ya se actualizaron, y por ende puedo reiniciar el token y continuar el juego
                 if(id == 0) {
                     
@@ -216,7 +217,7 @@ void jugar(int num_procesos, int id, const int token_inicial, int M, int anterio
                 printf("\n");
                 if(verificar_uno_vivo(&cant_proc_vivos) == 1){
                     printf("Proceso %d es el ganador\n", id_display);
-                    write(pipes_padre_hijo[id][1][1], &id_display, sizeof(id_display));
+                    write(pipes_padre_hijo[0][1][1], &id_display, sizeof(id_display));
                     exit(0);
                 }
             }

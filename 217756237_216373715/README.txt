@@ -38,5 +38,7 @@ Consideraciones:
       comunicar correctamente al padre que es el único vivo. En este caso, el
       proceso hijo imprime que es el ganador. A su vez, el padre también imprime
       pero si hubo un error al enviar/recibir el ID del ganador imprime ganador -1.
+      El problema es que el padre solo lee el pipe que tiene con el primer hijo.
     - Otro problema: A veces no se realiza bien el envío del token y se envía 
       repetidamente el mismo valor (la causa aún no ha sido identificada).
+    - Otro problema: En algunas instancias se queda estancado el programa.
