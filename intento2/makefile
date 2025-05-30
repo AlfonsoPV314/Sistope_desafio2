@@ -1,13 +1,13 @@
-all: desafio
+all: desafio2
 
 funciones.o: funciones.h funciones.c
 	gcc -g -c funciones.c
 
-desafio.o: funciones.h desafio.c
-	gcc -g -c desafio.c
+desafio2.o: funciones.h desafio2.c
+	gcc -g -c desafio2.c
 
-desafio: funciones.o desafio.o
-	gcc -g -o desafio funciones.o desafio.o
+desafio2: funciones.o desafio2.o
+	gcc -g -o desafio2 funciones.o desafio2.o
 
 clean:
-	rm -f funciones.o desafio.o desafio
+	rm -f funciones.o desafio2.o desafio2
